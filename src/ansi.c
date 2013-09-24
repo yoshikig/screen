@@ -193,6 +193,7 @@ register struct win *p;
   p->w_insert = 0;
   p->w_revvid = 0;
   p->w_mouse = 0;
+  p->w_mouse_protocol = 0;
   p->w_curinv = 0;
   p->w_curvvis = 0;
   p->w_autolf = 0;
@@ -1466,6 +1467,11 @@ int c, intermediate;
 	      curr->w_mouse = i ? a1 : 0;
 	      LMouseMode(&curr->w_layer, curr->w_mouse);
 	      break;
+	    case 1006:	/* sgr mouse*/
+	      curr->w_mouse_protocol = i ? a1 : 0;
+	      LMouseProtocol(&curr->w_layer, curr->w_mouse_protocol);
+	      break;
+	 /* case 1015:	   urxvt mouse */
 	    }
 	}
       break;

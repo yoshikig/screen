@@ -183,6 +183,7 @@ DefRestore()
   LCursorkeysMode(flayer, 0);
   LCursorVisibility(flayer, 0);
   LMouseMode(flayer, 0);
+  LMouseProtocol(flayer, 0);
   LSetRendition(flayer, &mchar_null);
   LSetFlow(flayer, nwin_default.flowflag & FLOW_NOW);
 }
@@ -836,6 +837,35 @@ int mode;
     }
 }
 
+void
+MouseProtocol(mode)
+int mode;
+{
+  if (!display)
+    return;
+
+  if (mode < D_mousetrack)
+    mode = D_mousetrack;
+
+  if (D_mouseprotocol != mode)
+    {
+      char mousebuf[20];
+      if (!D_CXT)
+	return;
+      if (D_mouseprotocol)
+	{
+	  sprintf(mousebuf, "\033[?%dl", D_mouseprotocol);
+	  AddStr(mousebuf);
+	}
+      if (mode)
+	{
+	  sprintf(mousebuf, "\033[?%dh", mode);
+	  AddStr(mousebuf);
+	}
+      D_mouseprotocol = mode;
+    }
+}
+
 static int StrCost;
 
 /* ARGSUSED */
@@ -1261,6 +1291,7 @@ int cur_only;
   CursorkeysMode(0);
   CursorVisibility(0);
   MouseMode(0);
+  MouseProtocol(0);
   SetRendition(&mchar_null);
   SetFlow(FLOW_NOW);
 
@@ -3129,6 +3160,7 @@ NukePending()
   int oldkeypad = D_keypad, oldcursorkeys = D_cursorkeys;
   int oldcurvis = D_curvis;
   int oldmouse = D_mouse;
+  int oldmouseprotocol = D_mouseprotocol;
 
   oldrend = D_rend;
   len = D_obufp - D_obuf;
@@ -3191,6 +3223,7 @@ NukePending()
   CursorkeysMode(oldcursorkeys);
   CursorVisibility(oldcurvis);
   MouseMode(oldmouse);
+  MouseProtocol(oldmouseprotocol);
   if (D_CWS)
     {
       debug("ResizeDisplay: using WS\n");
@@ -3415,20 +3448,65 @@ char *data;
   if (D_mouse && D_forecv)
     {
       unsigned char *bp = (unsigned char *)buf;
-      int x, y, i = size;
+      int x, y, i = size, j, k;
 
       /* XXX this assumes that the string is read in as a whole... */
       for (i = size; i > 0; i--, bp++)
 	{
-	  if (i > 5 && bp[0] == 033 && bp[1] == '[' && bp[2] == 'M')
+	  if (bp[0] == 033 && bp[1] == '[' && bp[2] == 'M')
 	    {
+	      /* 8bit Normal protocol */
 	      bp++;
 	      i--;
 	    }
-	  else if (i < 5 || bp[0] != 0233 || bp[1] != 'M')
+	  else if (bp[0] == 033 && bp[1] == '[' && bp[2] == '<')
+	    {
+	      /* 8bit SGR 1006 protocol */
+	      bp++;
+	      i--;
+	    }
+	  else if (bp[0] == 0233 && bp[1] == 'M')
+	    {
+	      /* 7bit Normal protocol */
+	    }
+	  else if (bp[0] == 0233 && bp[1] == '<')
+	    {
+	      /* 7bit SGR 1006 protocol */
+	    }
+	  else
 	    continue;
-	  x = bp[3] - 33;
-	  y = bp[4] - 33;
+
+	  if (bp[1] == 'M') {
+	    /* Normal protocol:
+	     *
+	     *   CSI M Cb Cx Cy
+	     *   (Cb, Cx, Cy as byte.)
+	     *
+	     * This coordinate values (Cx, Cy) are added origin offset +1 
+	     * and base offset +32 (to make it printable)
+	     */
+	    x = bp[3] - 33;
+	    y = bp[4] - 33;
+	  } else if (bp[1] == '<') {
+	    /* SGR 1006 protocol:
+	     *
+	     *   CSI M Db ; Dx ; Dy M/m 
+	     *   (Db, Dx, Dy as decimal formatted strings.)
+	     *
+	     * The coordinate values (Dx, Dy) are added origin offset +1 
+	     */
+	    for (j = 2; '0' <= bp[j] && bp[j] <= '9'; j++)
+	        ;
+	    if (bp[j++] != ';')
+	        continue;
+	    for (x = 0; '0' <= bp[j] && bp[j] <= '9'; j++)
+	        x = x * 10 + bp[j] - '0';
+	    if (bp[j++] != ';')
+	        continue;
+	    for (y = 0; '0' <= bp[j] && bp[j] <= '9'; j++)
+	        y = y * 10 + bp[j] - '0';
+	  }
+
 	  if (x >= D_forecv->c_xs && x <= D_forecv->c_xe && y >= D_forecv->c_ys && y <= D_forecv->c_ye)
 	    {
 	      if ((D_fore && D_fore->w_mouse) || (D_mousetrack && D_forecv->c_layer->l_mode == 1))
@@ -3438,15 +3516,36 @@ char *data;
 		  y -= D_forecv->c_yoff;
 		  if (x >= 0 && x < D_forecv->c_layer->l_width && y >= 0 && y < D_forecv->c_layer->l_height)
 		    {
-		      bp[3] = x + 33;
-		      bp[4] = y + 33;
-		      i -= 4;
-		      bp += 4;
+		      if (bp[1] == 'M')
+			{
+			  bp[3] = x + 33;
+			  bp[4] = y + 33;
+			  i -= 4;
+			  bp += 4;
+			}
+		      else if (bp[1] == '<')
+			{
+			  k = j;
+			  while (bp[--k] != ';') 
+			    {
+			      bp[k] = y % 10 + '0';
+			      y /= 10;
+			    }
+			  while (bp[--k] != ';') 
+			    {
+			      bp[k] = x % 10 + '0';
+			      x /= 10;
+			    }
+			  i -= j;
+			  bp += j;
+			}
 		      continue;
 		    }
 		}
 	    }
-	  else if (D_mousetrack && bp[2] == '#')
+	  else if (D_mousetrack && (
+		      (bp[1] == 'M' && bp[2] == '#') || /* Normal protocol */
+		      (bp[1] == '<' && bp[j] == 'm')))  /* SGR 1006 protocol */
 	    {
 	      /* 'focus' to the clicked region, only on mouse up */
 	      struct canvas *cv = FindCanvas(x, y);
@@ -3462,11 +3561,23 @@ char *data;
 	      bp--;
 	      size--;
 	    }
-	  if (i > 5)
-	    bcopy((char *)bp + 5, (char *)bp, i - 5);
-	  bp--;
-	  i -= 4;
-	  size -= 5;
+	
+	  if (bp[1] == 'M')
+	    {
+	      if (i > 5)
+		bcopy((char *)bp + 5, (char *)bp, i - 5);
+	      bp--;
+	      i -= 4;
+	      size -= 5;
+	    }
+	  else if (bp[1] == '<')
+	    {
+	      if (i > j + 1)
+		bcopy((char *)bp + j + 1, (char *)bp, i - j - 1);
+	      bp--;
+	      i -= j;
+	      size -= j + 1;
+	    }
 	}
     }
 #ifdef ENCODINGS

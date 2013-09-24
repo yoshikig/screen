@@ -912,6 +912,23 @@ int on;
 }
 
 void
+LMouseProtocol(l, on)
+struct layer *l;
+int on;
+{
+  struct canvas *cv;
+  for (cv = l->l_cvlist; cv; cv = cv->c_lnext)
+    {
+      display = cv->c_display;
+      if (D_blocked)
+	continue;
+      if (cv != D_forecv)
+	continue;
+      MouseProtocol(on);
+    }
+}
+
+void
 LClearAll(l, uself)
 struct layer *l;
 int uself;
